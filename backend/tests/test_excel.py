@@ -43,9 +43,36 @@ async def test_chain_query_to_excel(ro_session, tmp_path):
     assert zipfile.is_zipfile(path)   # a real .xlsx is a zip container
 
 
+async def test_excel_accepts_chart_handle(ro_session, tmp_path):
+    """The agent sometimes passes the chart handle (r2) to excel instead of the
+    table handle (r1). Excel should export the chart's underlying rows, not error."""
+    store = ArtifactStore(str(tmp_path))
+    turns = [
+        [ToolCall("query", {"sql": "SELECT channel_id, count(*) AS c FROM messages GROUP BY 1"},
+                  "c1"), TurnDone("tool_use")],
+        [ToolCall("chart", {"input_ref": "r1", "type": "bar", "x": "channel_id", "y": "c"}, "c2"),
+         TurnDone("tool_use")],
+        [ToolCall("excel", {"input_refs": ["r2"]}, "c3"), TurnDone("tool_use")],  # chart handle
+        [TextDelta("Exported."), TurnDone("stop")],
+    ]
+    events: list = []
+
+    async def emit(stage, payload):
+        events.append((stage, payload))
+
+    await AgentLoop(ScriptedProvider(turns), get_settings(), artifacts=store).run(
+        "chart channels then export", ro_session, emit
+    )
+
+    assert not [p for s, p in events if s == "tool_error"]     # no bad_reference
+    artifact = next(p for s, p in events if s == "tool_result" and p["kind"] == "artifact")
+    assert zipfile.is_zipfile(store.path_for(artifact["artifact_id"]))
+
+
 async def test_excel_rejects_oversize(tmp_path):
     store = ArtifactStore(str(tmp_path))
-    table = PluginResult(kind="table", data={"columns": ["x"], "rows": [[1]], "row_count": 100}, meta={})
+    rows = [[i] for i in range(100)]
+    table = PluginResult(kind="table", data={"columns": ["x"], "rows": rows, "row_count": 100}, meta={})
     ctx = PluginContext(
         trace_id="t", ro_session=None, inputs={"input_refs": [table]},
         emit=_noop, artifacts=store, row_cap=5000, statement_timeout_ms=5000,

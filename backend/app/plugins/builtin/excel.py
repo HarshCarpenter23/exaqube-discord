@@ -47,13 +47,15 @@ class ExcelPlugin(Plugin):
         "required": ["input_refs"],
         "additionalProperties": False,
     }
-    consumes = {"table"}
+    # Accepts a table, or a chart_spec (which carries its own rows) so that
+    # "chart it, then export to Excel" works whichever handle the agent passes.
+    consumes = {"table", "chart_spec"}
 
     async def execute(self, args: dict, ctx: PluginContext) -> PluginResult:
         tables = ctx.inputs["input_refs"]                 # list[PluginResult], kind-checked by loop
         sheet_names = args.get("sheet_names") or []
 
-        total_rows = sum(t.data["row_count"] for t in tables)
+        total_rows = sum(len(t.data["rows"]) for t in tables)
         if total_rows > ctx.artifact_max_rows:
             raise PluginError(
                 "too_large",
